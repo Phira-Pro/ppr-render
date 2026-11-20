@@ -3,7 +3,10 @@
 //! 整个流程不依赖命令行参数：启动后直接进入主界面，选择文件、播放或导出。
 //! 播放与导出复用 `ReplayScene` / `GameScene`，视觉与 Phira Pro 保持一致。
 
-use crate::{default_picker_dir, detect_chart, normalize_chart_path, online, replay, video};
+#[cfg(not(target_os = "android"))]
+use crate::default_picker_dir;
+use crate::{detect_chart, normalize_chart_path, online, picker, replay, video};
+use picker::{Picker, PickerKind, PickerResult};
 use anyhow::{Context, Result};
 use macroquad::prelude::*;
 use prpr::{
@@ -33,7 +36,11 @@ enum FormAction {
 
 enum FlowResult {
     Back,
-    Done(PathBuf),
+    Done {
+        path: PathBuf,
+        /// 导出成功但发布到公共目录失败等需要提示给用户的情况。
+        warning: Option<String>,
+    },
     Cancelled,
 }
 
@@ -74,7 +81,12 @@ pub async fn run(mut replay: Option<PathBuf>, mut chart: Option<PathBuf>) -> Res
         }
         match home.frame(&fonts, &background, icon.as_ref()) {
             HomeAction::None => {}
-            HomeAction::Quit => return Ok(()),
+            HomeAction::Quit => {
+                // Android 的渲染循环结束后 Activity 仍然存在，需要主动结束。
+                #[cfg(target_os = "android")]
+                crate::android::quit();
+                return Ok(());
+            }
             HomeAction::Play => {
                 if let Some((replay, chart)) = home.ready() {
                     match crate::play_paths(replay, chart, &mut painter).await {
@@ -93,8 +105,11 @@ pub async fn run(mut replay: Option<PathBuf>, mut chart: Option<PathBuf>) -> Res
                         .map(|it| it.meta.name.clone())
                         .unwrap_or_default();
                     match export_flow(replay, chart, name, &fonts, &mut painter).await {
-                        Ok(FlowResult::Done(path)) => {
-                            home.status = Some((format!("视频已保存：{}", path.display()), false));
+                        Ok(FlowResult::Done { path, warning }) => {
+                            home.status = Some(match warning {
+                                Some(warning) => (warning, true),
+                                None => (format!("视频已保存：{}", path.display()), false),
+                            });
                         }
                         Ok(FlowResult::Cancelled) => {
                             home.status = Some(("已取消导出".into(), false));
@@ -140,6 +155,8 @@ struct Home {
     online: OnlineUi,
     /// 未选谱面时点击播放 / 导出触发的自动下载。
     auto_download: Option<AutoDownload>,
+    /// Android 应用内文件浏览器。
+    picker: Option<Picker>,
 }
 
 struct AutoDownload {
@@ -315,6 +332,40 @@ impl Home {
         action
     }
 
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    fn open_picker(&mut self, kind: PickerKind) {
+        let start = match kind {
+            PickerKind::Replay => self
+                .replay_path
+                .as_ref()
+                .and_then(|path| path.parent().map(Path::to_path_buf)),
+            PickerKind::ChartFolder | PickerKind::ChartZip => self
+                .chart_path
+                .as_ref()
+                .and_then(|path| path.parent().map(Path::to_path_buf)),
+        };
+        self.picker = Some(Picker::new(kind, start));
+    }
+
+    fn handle_picker(&mut self, fonts: &Fonts) -> HomeAction {
+        let Some(picker) = self.picker.as_mut() else {
+            return HomeAction::None;
+        };
+        let kind = picker.kind();
+        match picker.frame(&fonts.ui) {
+            PickerResult::None => {}
+            PickerResult::Cancelled => self.picker = None,
+            PickerResult::Selected(path) => {
+                self.picker = None;
+                match kind {
+                    PickerKind::Replay => self.set_replay(path),
+                    PickerKind::ChartFolder | PickerKind::ChartZip => self.set_chart(path),
+                }
+            }
+        }
+        HomeAction::None
+    }
+
     fn frame(
         &mut self,
         fonts: &Fonts,
@@ -322,6 +373,9 @@ impl Home {
         icon: Option<&Texture2D>,
     ) -> HomeAction {
         set_default_camera();
+        if self.picker.is_some() {
+            return self.handle_picker(fonts);
+        }
         if self.online.open {
             if let Some(path) = self.online.frame(fonts) {
                 let label = display_path(&path);
@@ -513,6 +567,9 @@ impl Home {
             ButtonKind::Secondary,
             !busy,
         ) {
+            #[cfg(target_os = "android")]
+            self.open_picker(PickerKind::Replay);
+            #[cfg(not(target_os = "android"))]
             if let Some(path) =
                 pick_file("选择 Phira 回放", &["ppr", "phirar"], default_picker_dir())
             {
@@ -584,6 +641,9 @@ impl Home {
             ButtonKind::Ghost,
             !busy,
         ) {
+            #[cfg(target_os = "android")]
+            self.open_picker(PickerKind::ChartFolder);
+            #[cfg(not(target_os = "android"))]
             if let Some(path) = rfd::FileDialog::new()
                 .set_title("选择谱面文件夹")
                 .pick_folder()
@@ -592,6 +652,9 @@ impl Home {
             }
         }
         if button(zip, "ZIP", &fonts.ui, 16. * s, ButtonKind::Ghost, !busy) {
+            #[cfg(target_os = "android")]
+            self.open_picker(PickerKind::ChartZip);
+            #[cfg(not(target_os = "android"))]
             if let Some(path) = pick_file("选择谱面 ZIP", &["zip", "phira", "pez"], None) {
                 self.set_chart(path);
             }
@@ -1137,6 +1200,34 @@ impl OnlineUi {
         }
         if clicked_field != OnlineFocus::None {
             self.focus = clicked_field;
+            #[cfg(target_os = "android")]
+            match clicked_field {
+                OnlineFocus::Email => {
+                    crate::android::request_text(&self.email.value, false)
+                }
+                OnlineFocus::Password => {
+                    crate::android::request_text(&self.password.value, true)
+                }
+                OnlineFocus::ChartId => {
+                    crate::android::request_text(&self.chart_id.value, false)
+                }
+                OnlineFocus::None => {}
+            }
+        }
+
+        #[cfg(target_os = "android")]
+        if let Some(text) = crate::android::take_input() {
+            match self.focus {
+                OnlineFocus::Email => self.email.value = text,
+                OnlineFocus::Password => self.password.value = text,
+                OnlineFocus::ChartId => {
+                    self.chart_id.value = text
+                        .chars()
+                        .filter(|c| c.is_ascii_digit() || *c == '#' || *c == '＃')
+                        .collect();
+                }
+                OnlineFocus::None => {}
+            }
         }
 
         if is_key_pressed(KeyCode::Tab) {
@@ -1241,7 +1332,39 @@ async fn export_flow(
                     font: &fonts.ui,
                 };
                 match video::render(&mut scene, &options, painter, &mut progress).await {
-                    Ok(Some(path)) => return Ok(FlowResult::Done(path)),
+                    Ok(Some(path)) => {
+                        #[cfg(target_os = "android")]
+                        {
+                            let display = options
+                                .output
+                                .file_name()
+                                .map(|it| it.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| "replay.mp4".into());
+                            match crate::android::publish_video(&path, &display) {
+                                Ok(location) => {
+                                    let _ = std::fs::remove_file(&path);
+                                    return Ok(FlowResult::Done {
+                                        path: PathBuf::from(location),
+                                        warning: None,
+                                    });
+                                }
+                                Err(err) => {
+                                    // 视频本身已经写好，只是没能放到用户容易找到的目录。
+                                    return Ok(FlowResult::Done {
+                                        path: path.clone(),
+                                        warning: Some(format!(
+                                            "视频已导出，但保存到可访问目录失败：{err:#}（暂存在应用缓存）"
+                                        )),
+                                    });
+                                }
+                            }
+                        }
+                        #[cfg(not(target_os = "android"))]
+                        return Ok(FlowResult::Done {
+                            path,
+                            warning: None,
+                        });
+                    }
                     Ok(None) => {
                         let _ = std::fs::remove_file(&options.output);
                         return Ok(FlowResult::Cancelled);
@@ -1279,7 +1402,6 @@ struct ExportForm {
     start: TextField,
     end: TextField,
     output: PathBuf,
-    output_auto: bool,
     focus: Focus,
     status: Option<(String, bool)>,
 }
@@ -1318,7 +1440,6 @@ impl ExportForm {
             start: TextField::default(),
             end: TextField::default(),
             output,
-            output_auto: true,
             focus: Focus::None,
             status: None,
         }
@@ -1496,9 +1617,13 @@ impl ExportForm {
         let y4 = y3 + 58. * s;
         text(&fonts.ui, "输出", left, y4 + 20. * s, 17. * s, accent());
         let choose = Rect::new(right - 100. * s, y4, 100. * s, 38. * s);
+        #[cfg(target_os = "android")]
+        let output_display = "导出完成后保存到系统「下载/ppr-Render」".to_owned();
+        #[cfg(not(target_os = "android"))]
+        let output_display = self.output.display().to_string();
         let output_text = fit_text(
             &fonts.ui,
-            &self.output.display().to_string(),
+            &output_display,
             17. * s,
             choose.x - (left + 58. * s) - 14. * s,
         );
@@ -1510,7 +1635,13 @@ impl ExportForm {
             17. * s,
             Color::new(0.86, 0.9, 0.95, 1.),
         );
-        if button(choose, "选择…", &fonts.ui, 15. * s, ButtonKind::Ghost, true) {
+        #[cfg(target_os = "android")]
+        let _choose_clicked = false;
+        #[cfg(not(target_os = "android"))]
+        let choose_clicked =
+            button(choose, "选择…", &fonts.ui, 15. * s, ButtonKind::Ghost, true);
+        #[cfg(not(target_os = "android"))]
+        if choose_clicked {
             let suggestion = self
                 .output
                 .file_name()
@@ -1525,7 +1656,6 @@ impl ExportForm {
             }
             if let Some(path) = dialog.save_file() {
                 self.output = ensure_mp4(path);
-                self.output_auto = false;
             }
         }
 
@@ -1637,6 +1767,26 @@ impl ExportForm {
             } else {
                 Focus::None
             };
+        }
+        #[cfg(target_os = "android")]
+        if clicked {
+            if start_rect.contains(mouse) {
+                crate::android::request_text(&self.start.value, false);
+            } else if end_rect.contains(mouse) {
+                crate::android::request_text(&self.end.value, false);
+            }
+        }
+        #[cfg(target_os = "android")]
+        if let Some(text) = crate::android::take_input() {
+            let value: String = text
+                .chars()
+                .filter(|c| c.is_ascii_digit() || *c == '.')
+                .collect();
+            match self.focus {
+                Focus::Start => self.start.value = value,
+                Focus::End => self.end.value = value,
+                Focus::None => {}
+            }
         }
         if is_key_pressed(KeyCode::Tab) {
             focus = match focus {
@@ -1919,6 +2069,9 @@ impl video::Progress for GuiProgress<'_> {
         );
         let rate = frame as f64 / elapsed.max(1e-6);
         let remaining = (total.saturating_sub(frame) as f64 / rate.max(1e-6)).ceil() as u64;
+        #[cfg(target_os = "android")]
+        let cancel_hint = "点击右下角可取消";
+        #[cfg(not(target_os = "android"))]
         let cancel_hint = "Esc 或点击右下角可取消";
         let hint_width =
             measure_text(cancel_hint, Some(*self.font), (15. * s).round() as u16, 1.).width;
@@ -2219,6 +2372,7 @@ fn display_path(path: &Path) -> String {
     path.display().to_string()
 }
 
+#[cfg(not(target_os = "android"))]
 fn pick_file(title: &str, extensions: &[&str], dir: Option<PathBuf>) -> Option<PathBuf> {
     let mut dialog = rfd::FileDialog::new()
         .set_title(title)
@@ -2241,7 +2395,7 @@ fn default_output_dir() -> Option<PathBuf> {
     platform_output_dir()
 }
 
-#[cfg(any(target_os = "android", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 fn android_download_dir() -> PathBuf {
     std::env::var_os("EXTERNAL_STORAGE")
         .map(PathBuf::from)
@@ -2252,7 +2406,9 @@ fn android_download_dir() -> PathBuf {
 
 #[cfg(target_os = "android")]
 fn platform_output_dir() -> Option<PathBuf> {
-    Some(android_download_dir().join("ppr-Render"))
+    // 先写到应用缓存，导出完成后再由 Java 发布到系统下载目录。
+    // 这样不依赖共享存储权限，也能在 Android 10+ 的分区存储下工作。
+    Some(std::env::temp_dir().join("exports"))
 }
 
 #[cfg(target_os = "ios")]

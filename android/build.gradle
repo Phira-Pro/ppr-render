@@ -1,0 +1,9 @@
+// PPR Render 的 Android 壳工程。
+//
+// Rust 原生库由 app 模块的 cargoNdkBuild 任务交叉编译，APK 由 Gradle
+// 组装。推荐从仓库根目录运行 `python3 build.py android`，脚本会先准备
+// FFmpeg 再调用 Gradle。
+
+plugins {
+    id 'com.android.application' version '8.9.2' apply false
+}

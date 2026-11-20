@@ -5,11 +5,19 @@ edition = "2021"
 license = "GPL-3.0-only"
 description = "Local PPR replay player and video exporter built on the Phira Pro renderer"
 
+[lib]
+name = "ppr_render"
+path = "src/lib.rs"
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "ppr-render"
+path = "src/main.rs"
+
 [dependencies]
 anyhow = "1.0"
 macroquad = { git = "https://github.com/Phira-Pro/prpr-macroquad", rev = "4c6b796055e2d94d21e4930c8a51a277e8fb3b03", default-features = false }
 prpr = { path = "../Phira-Pro/prpr", default-features = false }
-rfd = "0.17.2"
 sasa = { git = "https://github.com/Phira-Pro/sasa", rev = "5049b671cff93be1cf2f7a3f693e7ae1f0c179f7", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
@@ -18,6 +26,13 @@ tempfile = "3.27.0"
 tokio = { version = "1.50", features = ["rt-multi-thread", "sync", "time", "macros"] }
 ureq = { version = "2.12.1", features = ["json"] }
 zstd = "0.13.3"
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+rfd = "0.17.2"
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21.1"
+ndk-context = "0.1.1"
 
 [profile.release]
 opt-level = 3

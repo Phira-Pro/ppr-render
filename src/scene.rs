@@ -1203,12 +1203,27 @@ impl ReplayScene {
             Rect::new(-0.75, -0.33, 1.5, 0.66),
             Color::new(0.03, 0.05, 0.08, 0.94),
         );
-        ui.text("PPR RENDER · 键盘快捷键")
+        #[cfg(target_os = "android")]
+        let title = "PPR RENDER · 触屏操作";
+        #[cfg(not(target_os = "android"))]
+        let title = "PPR RENDER · 键盘快捷键";
+        ui.text(title)
             .pos(0., -0.27)
             .anchor(0.5, 0.)
             .size(0.48)
             .color(WHITE)
             .draw();
+        #[cfg(target_os = "android")]
+        let lines = [
+            "底部控制台          播放、暂停、重播",
+            "拖动时间轴          定位回放进度",
+            "−5s / +5s           后退、前进 5 秒",
+            "倍速按钮            切换观看倍率",
+            "触点 / 帮助         开关触点或本帮助",
+            "上个 / 下个失误     跳到 BAD 或 MISS",
+            "返回主界面          回到选择页",
+        ];
+        #[cfg(not(target_os = "android"))]
         let lines = [
             "空格                 播放、暂停",
             "R                    回到开头并播放",

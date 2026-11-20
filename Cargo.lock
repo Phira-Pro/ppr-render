@@ -2899,7 +2899,9 @@ name = "ppr-render"
 version = "1.0.0"
 dependencies = [
  "anyhow",
+ "jni 0.21.1",
  "macroquad",
+ "ndk-context",
  "prpr",
  "rfd",
  "sasa",

@@ -1,0 +1,150 @@
+plugins {
+    id 'com.android.application'
+}
+
+// ---------------------------------------------------------------------------
+// Rust 原生库：libppr_render.so 由 cargo-ndk 交叉编译，连同 NDK 的
+// libc++_shared.so 一起放进 Gradle 的 jniLibs 目录。
+// ---------------------------------------------------------------------------
+def repoRoot = file("${rootProject.projectDir}/..")
+def abi = 'arm64-v8a'
+def rustTarget = 'aarch64-linux-android'
+def apiLevel = '26'
+// Gradle 的 jniLibs 源目录按 `<源目录>/<ABI>/*.so` 布局，所以这里指向
+// ABI 目录的父目录；cargo-ndk 与 FFmpeg 的产物仍写入各自的 ABI 子目录。
+def rustJniRoot = layout.buildDirectory.dir("rustJniLibs").get().asFile
+def ffmpegJniRoot = layout.buildDirectory.dir("ffmpegJniLibs").get().asFile
+def rustJniLibs = new File(rustJniRoot, abi)
+def ffmpegJniLibs = new File(ffmpegJniRoot, abi)
+def ndkDir = System.getenv('ANDROID_NDK_HOME')
+        ?: "${System.getenv('ANDROID_HOME') ?: "${System.getProperty('user.home')}/Android/Sdk"}/ndk/27.2.12479018"
+def hostOs = System.getProperty('os.name').toLowerCase()
+def ndkHostTag = hostOs.contains('win') ? 'windows-x86_64'
+        : (hostOs.contains('mac') ? 'darwin-x86_64' : 'linux-x86_64')
+def cargoOffline = providers.gradleProperty('pprCargoOffline').orNull == 'true'
+def cargoTargetDir = System.getenv('CARGO_TARGET_DIR') ?: "${repoRoot}/target"
+
+tasks.register('cargoNdkBuild') {
+    group = 'rust'
+    description = '用 cargo-ndk 编译 libppr_render.so 并准备 jniLibs'
+
+    def outDir = rustJniLibs
+    inputs.files(fileTree("${repoRoot}/src"), fileTree("${repoRoot}/assets"))
+    inputs.file("${repoRoot}/Cargo.toml")
+    inputs.file("${repoRoot}/Cargo.lock")
+    inputs.files(fileTree("${repoRoot}/../Phira-Pro/prpr/src"))
+    inputs.file("${repoRoot}/../Phira-Pro/prpr/Cargo.toml")
+    inputs.property('ndkDir', ndkDir)
+    inputs.property('offline', cargoOffline)
+    outputs.dir(outDir)
+
+    doLast {
+        outDir.mkdirs()
+        exec {
+            workingDir repoRoot
+            def command = ['cargo', 'ndk', '-t', abi, '--platform', apiLevel,
+                           'build', '--locked', '--release', '--lib']
+            if (cargoOffline) {
+                command.add('--offline')
+            }
+            commandLine command
+        }
+        copy {
+            from "${cargoTargetDir}/${rustTarget}/release/libppr_render.so"
+            into outDir
+        }
+        copy {
+            from "${ndkDir}/toolchains/llvm/prebuilt/${ndkHostTag}/sysroot/usr/lib/${rustTarget}/libc++_shared.so"
+            into outDir
+        }
+    }
+}
+
+tasks.register('ffmpegJniLibs') {
+    group = 'rust'
+    description = '把 arm64 FFmpeg 可执行文件放进 jniLibs（命名为 libffmpeg.so）'
+
+    def outDir = ffmpegJniLibs
+    def source = providers.gradleProperty('pprFfmpeg')
+            .getOrElse("${repoRoot}/target/android-ffmpeg/ffmpeg-arm64")
+    def skip = providers.gradleProperty('pprSkipFfmpeg').orNull == 'true'
+    inputs.property('skip', skip)
+    if (!skip) {
+        // 用文件本身作为输入，重新编译后即使路径不变也会更新 APK。
+        inputs.file(source)
+    }
+    outputs.dir(outDir)
+
+    doLast {
+        def target = new File(outDir, 'libffmpeg.so')
+        if (skip) {
+            target.delete()
+            logger.warn('pprSkipFfmpeg=true：APK 将不包含 FFmpeg，视频导出不可用')
+            return
+        }
+        def input = file(source)
+        if (!input.isFile()) {
+            throw new GradleException("找不到 Android FFmpeg：${input}\n" +
+                    "请先在仓库根目录运行 `python3 build.py android`，或通过 -PpprFfmpeg=<path> 指定。")
+        }
+        outDir.mkdirs()
+        copy {
+            from input
+            into outDir
+            rename { 'libffmpeg.so' }
+        }
+        target.setExecutable(true)
+    }
+}
+
+android {
+    namespace 'org.pprrender.app'
+    ndkVersion '27.2.12479018'
+    compileSdk 35
+    buildToolsVersion '35.0.0'
+
+    defaultConfig {
+        applicationId 'org.pprrender.app'
+        minSdk 26
+        // 28 而不是 33：Android 10 起禁止 targetSdk >= 29 的应用执行自己
+        // 数据目录中的文件。视频导出要拉起 APK 里打包的 FFmpeg，
+        // targetSdk 28 才允许从缓存目录 exec。
+        targetSdk 28
+        versionCode 1000000
+        versionName '1.0.0'
+        ndk { abiFilters abi }
+    }
+
+    sourceSets {
+        main {
+            // 字体、资源包与 HUD 贴图同时在 APK 的 assets 里；Android 的
+            // macroquad 资源加载器直接读 APK assets，不读本地缓存目录。
+            assets.srcDirs += ["${repoRoot}/assets"]
+            jniLibs.srcDirs += [rustJniRoot, ffmpegJniRoot]
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            shrinkResources false
+            // 本地工具默认用调试密钥签名，方便直接安装；分发到应用商店时
+            // 应替换成自己的签名配置。
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    packaging {
+        // 解压原生库（extractNativeLibs=true），FFmpeg 才能作为子进程执行。
+        jniLibs { useLegacyPackaging = true }
+    }
+
+    lint { abortOnError false }
+}
+
+tasks.named('preBuild') { dependsOn 'cargoNdkBuild', 'ffmpegJniLibs' }

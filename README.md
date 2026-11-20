@@ -1,11 +1,11 @@
 # PPR Render
 
-**PPR Render** 是一个独立的 `.ppr` 回放播放器与视频导出器，带完整桌面图形界面。它读取 Phira Pro 录制的 `.ppr` 回放，按回放中的真实判定和触点播放，并把同一份回放渲染为 MP4 视频。当前版本为 **1.0.0**。
+**PPR Render** 是一个独立的 `.ppr` 回放播放器与视频导出器，提供桌面与 Android 图形界面。它读取 Phira Pro 录制的 `.ppr` 回放，按回放中的真实判定和触点播放，并把同一份回放渲染为 MP4 视频。当前版本为 **1.0.0**。
 
 ## 这是什么
 
 PPR Render 不是音游本体，也不是谱面编辑器。只是一个渲染 [Phira Pro](https://github.com/Phira-Pro/Phira-Pro) 导出的 `.ppr` 文件。
- 它只做两件事：播放 Phira Pro 回放，以及把回放导出为视频。回放中的判定、连击、长条状态、触点和音符音效都来自录制文件，不使用自动演示替代。
+它只做两件事：播放 Phira Pro 回放，以及把回放导出为视频。回放中的判定、连击、长条状态、触点和音符音效都来自录制文件，不使用自动演示替代。
 
 ## 基于什么
 
@@ -14,8 +14,8 @@ PPR Render 不是音游本体，也不是谱面编辑器。只是一个渲染 [P
 Phira Pro、Phira 与 `prpr` 均以 GPL-3.0-only 授权；完整来源、资源署名和依赖许可见文末「许可与第三方说明」。
 
 - **本地优先**：回放、谱面、音乐、曲绘默认全部从本地读取；网络只用于可选的 Phira 账号登录与在线谱面下载。
-- **单文件分发**：内置字体、默认资源包、HUD 贴图会嵌入可执行文件，首次启动时释放到系统缓存目录。谱面与音乐仍由用户提供。
-- **跨平台**：Linux / Windows / macOS 共用同一套渲染与播放逻辑。
+- **单文件分发**：桌面版把字体、默认资源包、HUD 贴图嵌入可执行文件，首次启动时释放到系统缓存目录；Android 版放在 APK 的 assets 中。谱面与音乐仍由用户提供。
+- **跨平台**：Linux / Windows / macOS / Android 共用同一套渲染与播放逻辑。Android 版本打包了 arm64 FFmpeg，安装后即可离线导出视频。
 
 ![主界面](docs/screenshot-home.png)
 
@@ -59,7 +59,7 @@ Windows 使用 `python build.py`，Linux / macOS 可使用 `python3 build.py`。
 `build.py` 会执行 `cargo build --locked --release`，版本号从 `Cargo.toml` 读取，
 平台名从 Rust 主机目标派生；设置 `CARGO_BUILD_TARGET` 时会使用对应的目标和输出目录。
 `--platform windows|linux|macos` 可显式指定平台，但必须在对应系统上原生构建。
-`--output` 可指定 ZIP 输出目录，默认是项目下的 `dist/`。
+`--output` 可指定分发包输出目录（桌面 ZIP 或 Android APK），默认是项目下的 `dist/`。
 
 各平台的编译环境：
 
@@ -79,6 +79,33 @@ sudo apt install --no-install-recommends build-essential cmake pkg-config \
 
 `rfd` 默认使用 XDG Desktop Portal。如果桌面环境没有 portal 服务，可以安装对应的 portal 后端；界面中的文件选择依赖它。
 
+### Android
+
+Android 版本需要 Android SDK、NDK **27.2.12479018**、JDK 17+、
+Rust 的 `aarch64-linux-android` 目标、`cargo-ndk`，以及 `curl` 和 `make`
+（首次构建会下载并编译 FFmpeg）。在项目根目录执行：
+
+```bash
+python3 build.py android
+```
+
+脚本会按 Phira Pro 的同一套参数交叉编译静态 x264 与 FFmpeg 7.1.1
+（默认缓存在 `target/android-ffmpeg/`），再用 Gradle 构建 arm64 APK。
+产物为：
+
+```text
+dist/ppr-render-v1.0.0-android-arm64-v8a.apk
+```
+
+`--force-ffmpeg` 可忽略缓存重新编译 FFmpeg，`--skip-ffmpeg` 用于复用已有
+FFmpeg 产物，`--offline` 让 Cargo 与 Gradle 使用本地缓存。APK 默认使用
+调试密钥签名，方便直接安装；正式分发请替换成自己的签名配置。
+
+Android 端不需要系统安装 FFmpeg：APK 中的 `libffmpeg.so` 会随安装解压到
+原生库目录，应用启动时复制到缓存目录并补上可执行位。Android 10 起禁止
+`targetSdk >= 29` 的应用执行自身数据目录中的文件，因此本 APK 使用
+`targetSdk 28`，这也是 Phira Pro 的做法。
+
 ### 版本固定
 
 `Cargo.toml` 固定了 Phira Pro 使用的 macroquad / miniquad git revision，避免上游分支变化导致回放视觉或输入行为漂移。升级 `prpr` 时，请同步更新本项目的 macroquad revision。
@@ -92,6 +119,22 @@ ppr-render
 ```
 
 界面中可以选择 `.ppr` 回放、谱面文件夹或谱面 ZIP，然后播放或导出视频。选择回放后会自动查找同目录及常见 Phira Pro 数据目录里的谱面。主界面会保留本次选择，退出播放后会回到这里。
+
+### Android 使用
+
+Android 版本要求 Android 8.0（API 26）或更高，仅提供 arm64 构建。
+把 `.ppr` 回放和对应谱面（文件夹或 ZIP）放到手机的「下载」等共享目录，
+然后在应用内点击「选择回放」浏览即可。Android 没有桌面系统文件对话框，
+应用内提供了带「下载 / 文档 / 主目录 / 应用文件」快捷入口的文件浏览器；
+回放和谱面放在同一目录时仍会自动匹配同名谱面。从共享目录读取文件需要
+授予存储读取权限；如果系统限制了共享目录访问，可以用 `adb push` 把文件
+放进应用外部文件目录（`Android/data/org.pprrender.app/files`），再从
+「应用文件」进入。
+
+在线谱面的账号与谱面 ID 输入使用系统输入框。导出完成后视频会出现在
+系统「下载/ppr-Render」，文件管理器与相册都能直接打开；如果公共下载目录
+不可写，会退回到应用外部目录的 `Movies/ppr-Render`，不会只留在缓存中。
+播放本身不写入共享存储；部分旧系统首次启动会请求读写共享存储的权限。
 
 谱面行右侧的「在线」可以按 Phira 谱面 ID 下载在线谱面，下载完成后会自动选中；ID 可以直接填数字，也可以带 `#` 或全角 `＃` 前缀。只选了回放、还没选谱面时，直接点击「开始播放」或「导出视频」也会尝试按回放中的谱面 ID 在线下载：如果回放指向的是本地谱面、而不是在线谱面，会提示手动选择；如果谱面已下架、服务器出错或本机没有网络，会分别显示对应的错误提示。登录 Phira 账号是可选操作：公开谱面不登录也能下载，登录后请求会携带账号令牌。登录只保存刷新令牌到系统数据目录（Linux 默认 `~/.local/share/ppr-render/account.json`），不会保存密码。主界面右上角显示当前账号状态，右下角显示版本号。
 
@@ -109,9 +152,12 @@ ppr-render --play replay.ppr /path/to/chart
 
 ### 导出视频
 
-视频导出需要系统里有 **FFmpeg**（`ffmpeg` 命令或 `PHIRA_FFMPEG` 指向可执行文件）。播放功能本身不依赖 FFmpeg。
+桌面端视频导出需要系统里有 **FFmpeg**（`ffmpeg` 命令或 `PHIRA_FFMPEG` 指向可执行文件）。Android 端已随 APK 打包 FFmpeg，无需额外安装。播放功能本身不依赖 FFmpeg。
 
-在 Android 上，导出文件默认保存到 `/sdcard/Download/ppr-Render`；iOS 上默认保存到应用 Documents 下的 `ppr-Render`。目录不存在时会在首次导出时自动创建。桌面端默认仍保存在回放文件旁边，可用环境变量 `PPR_RENDER_OUTPUT_DIR` 指定其他目录。
+桌面端默认把视频保存在回放文件旁边，可用环境变量 `PPR_RENDER_OUTPUT_DIR`
+指定其他目录。Android 端先写入应用缓存：Android 10 及以上通过 MediaStore
+发布到系统「下载/ppr-Render」，不需要存储写入权限；Android 9 及更早会直接
+写入公共下载目录，首次启动时请求写入权限。
 
 在图形界面中选择回放和谱面后点击「导出视频」，可以设置：
 
@@ -124,7 +170,8 @@ ppr-render --play replay.ppr /path/to/chart
 - 是否渲染 Phira Pro 风格的开场与结算。结算面板会显示回放记录中的玩家名、总分、准确率、连击和判定数量；
 - 游玩画面细节：AP/FC 指示、双押提示、粒子、实时准确率、判定详情、Perfect 连击、Early/Late。
 
-导出过程中会显示当前画面、进度和预计剩余时间，按 Esc 或点击「取消」可以中止。
+导出过程中会显示当前画面、进度和预计剩余时间；点击「取消」（Android 端
+位于右下角）可以中止，桌面端也可以按 Esc。
 
 命令行导出同样保留，适合批处理：
 
@@ -162,7 +209,7 @@ ppr-render replay.ppr --chart /path/to/chart --video silent.mp4 --no-audio
 | `--perfect-combo` | 显示 Perfect 连击 |
 | `--early-late` | 显示 Early / Late 统计 |
 
-导出时窗口会隐藏，终端显示帧进度与渲染速度。渲染速率只影响导出耗时，不影响视频时长或节奏。
+导出时命令行窗口会隐藏，终端显示帧进度与渲染速度。渲染速率只影响导出耗时，不影响视频时长或节奏。
 
 ### 环境变量
 
@@ -173,7 +220,7 @@ ppr-render replay.ppr --chart /path/to/chart --video silent.mp4 --no-audio
 | `PPR_RENDER_CHART_DIR` | 谱面根目录；会尝试 `<root>/<id>`、`<root>/charts/download/<id>`、`<root>/data/charts/download/<id>` |
 | `PPR_RENDER_VIDEO` | 默认视频输出路径；设置后直接进入导出模式 |
 | `PPR_RENDER_DATA_DIR` | 在线谱面与登录状态的保存目录；默认使用系统数据目录下的 `ppr-render/` |
-| `PPR_RENDER_OUTPUT_DIR` | 视频导出的默认目录；不存在时自动创建。移动端默认使用下载目录下的 `ppr-Render` |
+| `PPR_RENDER_OUTPUT_DIR` | 桌面端视频导出的默认目录；不存在时自动创建。Android 端始终先写入应用缓存，再发布到系统「下载/ppr-Render」 |
 | `PPR_RENDER_VERBOSE` | 输出谱面加载耗时、噪域低通区间等诊断信息 |
 | `PPR_RENDER_ASSETS` | 开发时直接使用源码里的 `assets/`，不读取内置资源 |
 | `PHIRA_FFMPEG` | 指定 FFmpeg 可执行文件（视频导出用） |
@@ -202,6 +249,10 @@ ppr-render replay.ppr --chart /path/to/chart --video silent.mp4 --no-audio
 
 鼠标可以直接拖动底部时间轴；右下角「返回主界面」按钮和右上角按钮都可以用鼠标操作。
 
+Android 端全部使用触屏：底部控制台提供重播、±5 秒、播放 / 暂停、倍速、
+触点开关、上个 / 下个失误和返回主界面；拖动时间轴可以定位，右上角可以
+隐藏或显示控制台。
+
 ## 回放一致性
 
 - 回放记录中的判定设置（窗口、算法、GRADING、STRICT / FULLSCREEN / NO_COMBO_SCORE、Phigros 规则等）会覆盖本地默认值。
@@ -224,6 +275,9 @@ ppr-render(.exe)
 会在 `dist/` 生成 `ppr-render-v<版本>-<平台>.zip`，例如
 `ppr-render-v1.0.0-linux-x86_64.zip`。包内包含程序、README、许可证和 `docs/`；
 字体、贴图与音效已经嵌入程序，不需要额外携带 `assets/`。
+
+Android 使用 `python3 build.py android`，在 `dist/` 生成
+`ppr-render-v<版本>-android-arm64-v8a.apk`。APK 已包含 arm64 原生库和 FFmpeg。
 
 已有 release 程序时，可以加 `--skip-build` 只重新打包：
 
@@ -266,7 +320,10 @@ Copyright (C) 2026 PPR Render contributors
 
 ### 外部组件
 
-视频导出功能调用系统中的 **FFmpeg**，本项目不附带、不修改 FFmpeg；FFmpeg 的许可与分发条款请见其官方项目。
+桌面端视频导出调用系统中的 **FFmpeg**，本项目不附带、不修改 FFmpeg。
+Android 版本在构建时使用 NDK 编译 FFmpeg 7.1.1 与 x264，并随 APK 一同分发；
+两者均为 GPL 兼容组件（FFmpeg 以 `--enable-gpl --enable-libx264` 构建），
+许可与分发条款请见 FFmpeg、x264 官方项目。
 
 在线功能使用 Rust 的 `ureq` 等 HTTP / TLS 依赖，其余 Rust crate 的许可证信息可在 `Cargo.lock` 对应版本及 crates.io 页面中查看。
 

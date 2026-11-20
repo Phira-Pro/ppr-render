@@ -570,24 +570,43 @@ fn ffmpeg_name() -> &'static str {
 
 fn read_pixels(target: RenderTarget, width: u32, height: u32, buffer: &mut [u8]) {
     unsafe {
-        let mut previous = 0;
-        glGetIntegerv(0x8CAA, &mut previous); // GL_READ_FRAMEBUFFER_BINDING
-        glBindFramebuffer(
-            GL_READ_FRAMEBUFFER,
-            target
-                .render_pass
-                .gl_internal_id(get_internal_gl().quad_context),
-        );
-        glReadPixels(
-            0,
-            0,
-            width as i32,
-            height as i32,
-            GL_RGBA,
-            GL_UNSIGNED_BYTE,
-            buffer.as_mut_ptr() as _,
-        );
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, previous as u32);
+        let id = target
+            .render_pass
+            .gl_internal_id(get_internal_gl().quad_context);
+        // Android 的 miniquad 使用 OpenGL ES 2 上下文，没有单独的
+        // GL_READ_FRAMEBUFFER 绑定；GL_FRAMEBUFFER 在 ES2 / ES3 上都可用。
+        #[cfg(target_os = "android")]
+        {
+            let mut previous = 0;
+            glGetIntegerv(0x8CA6, &mut previous); // GL_FRAMEBUFFER_BINDING
+            glBindFramebuffer(GL_FRAMEBUFFER, id);
+            glReadPixels(
+                0,
+                0,
+                width as i32,
+                height as i32,
+                GL_RGBA,
+                GL_UNSIGNED_BYTE,
+                buffer.as_mut_ptr() as _,
+            );
+            glBindFramebuffer(GL_FRAMEBUFFER, previous as u32);
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let mut previous = 0;
+            glGetIntegerv(0x8CAA, &mut previous); // GL_READ_FRAMEBUFFER_BINDING
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, id);
+            glReadPixels(
+                0,
+                0,
+                width as i32,
+                height as i32,
+                GL_RGBA,
+                GL_UNSIGNED_BYTE,
+                buffer.as_mut_ptr() as _,
+            );
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, previous as u32);
+        }
     }
 }
 
