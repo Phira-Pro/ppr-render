@@ -1,0 +1,127 @@
+name: Build Desktop Packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      source-ref:
+        description: ppr-render commit, tag or branch to build; empty uses the selected ref
+        required: false
+        type: string
+        default: ''
+      phira-pro-ref:
+        description: Phira-Pro commit, tag or branch for the prpr dependency; empty uses .github/phira-pro-ref
+        required: false
+        type: string
+        default: ''
+  workflow_call:
+    inputs:
+      source-ref:
+        description: ppr-render commit, tag or branch to build; empty uses the caller SHA
+        required: false
+        type: string
+        default: ''
+      phira-pro-ref:
+        description: Phira-Pro commit, tag or branch for the prpr dependency; empty uses .github/phira-pro-ref
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows
+            runner: windows-latest
+          - platform: linux
+            runner: ubuntu-24.04
+          - platform: macos
+            runner: macos-15
+    steps:
+      - name: Check out ppr-render
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.source-ref || github.sha }}
+          path: ppr-render
+
+      - name: Resolve Phira-Pro revision
+        id: phira
+        shell: bash
+        env:
+          INPUT_REF: ${{ inputs.phira-pro-ref }}
+        run: |
+          set -euo pipefail
+          ref="${INPUT_REF:-}"
+          if [ -z "$ref" ]; then
+            ref="$(tr -d '[:space:]' < ppr-render/.github/phira-pro-ref)"
+          fi
+          if [ -z "$ref" ]; then
+            echo "::error::Phira-Pro revision is empty; set .github/phira-pro-ref or the phira-pro-ref input"
+            exit 1
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+      - name: Check out Phira-Pro
+        uses: actions/checkout@v7.0.1
+        with:
+          repository: Phira-Pro/Phira-Pro
+          ref: ${{ steps.phira.outputs.ref }}
+          path: Phira-Pro
+          fetch-depth: 1
+
+      - name: Record Phira-Pro commit
+        id: phira-commit
+        shell: bash
+        run: echo "sha=$(git -C Phira-Pro rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config libasound2-dev libx11-dev libxi-dev \
+            libwayland-dev libgl1-mesa-dev libdbus-1-dev zlib1g-dev
+
+      - name: Install Rust toolchain
+        working-directory: ppr-render
+        run: rustup toolchain install
+
+      - name: Cache Cargo
+        uses: actions/cache@v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ppr-render/target/release
+          key: ppr-render-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ppr-render/Cargo.lock', 'ppr-render/rust-toolchain.toml', 'Phira-Pro/Cargo.toml', 'Phira-Pro/prpr/Cargo.toml') }}-${{ steps.phira-commit.outputs.sha }}
+          restore-keys: |
+            ppr-render-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ppr-render/Cargo.lock', 'ppr-render/rust-toolchain.toml', 'Phira-Pro/Cargo.toml', 'Phira-Pro/prpr/Cargo.toml') }}-
+            ppr-render-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Build and package
+        working-directory: ppr-render
+        env:
+          CARGO_TERM_COLOR: always
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: '1'
+        run: python build.py --platform ${{ matrix.platform }} --package --output dist/${{ matrix.platform }}
+
+      - name: Upload package
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: ppr-render-${{ matrix.platform }}-${{ runner.arch }}
+          path: ppr-render/dist/${{ matrix.platform }}/*.zip
+          compression-level: 0
+          if-no-files-found: error

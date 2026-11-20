@@ -35,7 +35,7 @@ Phira Pro、Phira 与 `prpr` 均以 GPL-3.0-only 授权；完整来源、资源�
 
 ## 构建
 
-需要 Rust（与 Phira Pro 一致使用 nightly；能编译 `prpr` 的较新 stable 也可以）、
+需要 Rust（版本由 `rust-toolchain.toml` 固定为与 Phira Pro 一致的 nightly；能编译 `prpr` 的较新 stable 也可以）、
 Python 3.8+（构建脚本只使用标准库）和对应平台的 C/C++ 编译环境。
 
 构建前请准备 Phira Pro 的 `prpr` 源码，并让 `Cargo.toml` 中的 `prpr` path 依赖指向它；不需要修改 Phira Pro 源码。
@@ -99,7 +99,8 @@ dist/ppr-render-v1.0.0-android-arm64-v8a.apk
 
 `--force-ffmpeg` 可忽略缓存重新编译 FFmpeg，`--skip-ffmpeg` 用于复用已有
 FFmpeg 产物，`--offline` 让 Cargo 与 Gradle 使用本地缓存。APK 默认使用
-调试密钥签名，方便直接安装；正式分发请替换成自己的签名配置。
+调试密钥签名，方便直接安装；正式分发请替换成自己的签名配置。GitHub Actions
+中的 Android 工作流会从仓库 Secrets 注入正式签名，缺失时直接失败，不会回退到调试签名。
 
 Android 端不需要系统安装 FFmpeg：APK 中的 `libffmpeg.so` 会随安装解压到
 原生库目录，应用启动时复制到缓存目录并补上可执行位。Android 10 起禁止
@@ -108,7 +109,19 @@ Android 端不需要系统安装 FFmpeg：APK 中的 `libffmpeg.so` 会随安装
 
 ### 版本固定
 
+`rust-toolchain.toml` 固定了构建使用的 Rust nightly 版本，与 Phira Pro 保持一致。
+
 `Cargo.toml` 固定了 Phira Pro 使用的 macroquad / miniquad git revision，避免上游分支变化导致回放视觉或输入行为漂移。升级 `prpr` 时，请同步更新本项目的 macroquad revision。
+
+### 自动构建
+
+仓库提供三套 GitHub Actions 工作流，均可在 Actions 页面手动触发：
+
+- `Build Desktop Packages`：分别在 Windows、Linux、macOS 上构建并打包桌面版。
+- `Build Android APK`：构建 arm64-v8a 的正式签名 APK，读取仓库 Secrets 中的 `ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`；缺少任一 Secret 时直接失败，不会回退到调试签名。
+- `Publish Release Assets`：发布 Release 后自动构建桌面包和 APK 并上传到该 Release，也可手动指定 tag。tag 必须等于 `Cargo.toml` 中的版本号，或为该版本号加 `v` 前缀。
+
+构建产物以 `ppr-render-<平台>-<架构>` 和 `ppr-render-android-ARM64` 的 artifact 形式提供。工作流通过 `.github/phira-pro-ref` 固定 `prpr` 依赖使用的 Phira Pro 提交，避免上游更新导致构建漂移；升级 Phira Pro 依赖时同步修改该文件中的提交 SHA。
 
 ## 运行
 

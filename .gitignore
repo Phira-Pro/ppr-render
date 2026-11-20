@@ -8,3 +8,5 @@ __pycache__/
 /android/app/build
 /android/local.properties
 /android/.idea
+/android/keystore.properties
+*.jks
