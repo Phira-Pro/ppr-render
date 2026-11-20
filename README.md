@@ -239,6 +239,8 @@ python3 build.py --package --skip-build
 
 ### 项目许可
 
+Copyright (C) 2026 PPR Render contributors
+
 本项目代码以 **GPL-3.0-only** 发布，因为复用的 `prpr` 引擎来自 GPL-3.0 的 Phira Pro；完整许可文本见 `LICENSE`。
 
 ### 基础项目
