@@ -106,19 +106,33 @@ android {
     defaultConfig {
         applicationId 'org.pprrender.app'
         minSdk 26
-        // 28 而不是 33：Android 10 起禁止 targetSdk >= 29 的应用执行自己
-        // 数据目录中的文件。视频导出要拉起 APK 里打包的 FFmpeg，
-        // targetSdk 28 才允许从缓存目录 exec。
         targetSdk 28
         versionCode 1000000
         versionName '1.0.0'
         ndk { abiFilters abi }
     }
 
+    // --- 新增：自动检测正式签名配置 ---
+    def keystorePropertiesFile = rootProject.file('keystore.properties')
+    def keystoreProperties = new Properties()
+    if (keystorePropertiesFile.exists()) {
+        keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+    }
+
+    signingConfigs {
+        release {
+            if (keystorePropertiesFile.exists()) {
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+                storeFile rootProject.file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+            }
+        }
+    }
+    // --------------------------------
+
     sourceSets {
         main {
-            // 字体、资源包与 HUD 贴图同时在 APK 的 assets 里；Android 的
-            // macroquad 资源加载器直接读 APK assets，不读本地缓存目录。
             assets.srcDirs += ["${repoRoot}/assets"]
             jniLibs.srcDirs += [rustJniRoot, ffmpegJniRoot]
         }
@@ -128,9 +142,10 @@ android {
         release {
             minifyEnabled false
             shrinkResources false
-            // 本地工具默认用调试密钥签名，方便直接安装；分发到应用商店时
-            // 应替换成自己的签名配置。
-            signingConfig signingConfigs.debug
+            // --- 修改：有正式证书用 release 签名，否则回退到 debug 签名 ---
+            signingConfig keystorePropertiesFile.exists()
+                    ? signingConfigs.release
+                    : signingConfigs.debug
         }
     }
 
@@ -140,7 +155,6 @@ android {
     }
 
     packaging {
-        // 解压原生库（extractNativeLibs=true），FFmpeg 才能作为子进程执行。
         jniLibs { useLegacyPackaging = true }
     }
 
